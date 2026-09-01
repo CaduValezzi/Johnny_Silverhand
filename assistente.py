@@ -292,12 +292,20 @@ class AssistenteVirtual:
             self.falar("Não consegui reconhecer você.")
 
     def cadastrar_rosto(self):
-        """Executa capturar_rosto.py (captura de amostras) e, em seguida,
-        treinar_modelo.py (retreino), atualizando o reconhecimento facial
-        sem precisar sair do assistente."""
-        self.falar("Vamos cadastrar um novo rosto. Olhe pro terminal e digite o nome quando for solicitado.")
+        """Pergunta o nome por voz e executa capturar_rosto.py (captura de
+        amostras) e, em seguida, treinar_modelo.py (retreino), atualizando o
+        reconhecimento facial sem precisar sair do assistente."""
+        self.falar("Qual o nome da pessoa que eu devo cadastrar?")
+        nome = self.ouvir(timeout=8, phrase_time_limit=8)
 
-        resultado_captura = subprocess.run([sys.executable, "capturar_rosto.py"])
+        if not nome:
+            self.falar("Não consegui te ouvir, tente novamente.")
+            return
+
+        nome = nome.replace(" ", "")  # evita espaços no nome do arquivo de amostra
+        self.falar(f"Ok, vamos capturar o rosto de {nome}. Olhe pra câmera e pressione 'q' quando o rosto estiver enquadrado.")
+
+        resultado_captura = subprocess.run([sys.executable, "capturar_rosto.py", nome])
         if resultado_captura.returncode != 0:
             self.falar("Houve um problema durante a captura das amostras.")
             return
@@ -312,7 +320,7 @@ class AssistenteVirtual:
         # recarrega o modelo e o mapa de nomes em memória, sem precisar reiniciar o assistente
         self.mapa_nomes = self._carregar_mapa_nomes()
         self.modelo_carregado = self._carregar_modelo_facial()
-        self.falar("Novo rosto cadastrado e modelo atualizado com sucesso.")
+        self.falar(f"{nome} cadastrado e modelo atualizado com sucesso.")
 
     # ------------------------------------------------------------------
     # Item 9: IA generativa (Groq) - fallback para perguntas abertas
