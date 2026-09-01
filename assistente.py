@@ -48,6 +48,19 @@ class AssistenteVirtual:
     # Palavras que ativam a assistente (aceita o nome completo ou o apelido)
     PALAVRAS_ATIVACAO = ["johnny silverhand", "johnny"]
 
+    # Gatilhos de voz aceitos para cada comando (várias formas de falar a mesma coisa)
+    GATILHOS_CADASTRAR_EVENTO = ["cadastrar evento", "cadastra um evento", "cadastra evento", "novo evento", "criar evento"]
+    GATILHOS_LER_AGENDA = ["ler agenda", "leia a agenda", "ler minha agenda", "mostrar agenda", "quais são meus eventos"]
+    GATILHOS_LIMPAR_AGENDA = ["limpar agenda", "apagar a agenda", "apagar agenda", "limpar minha agenda", "zerar agenda"]
+    GATILHOS_HORA = ["que horas são", "que horas é", "me diz as horas", "qual é a hora", "que horas"]
+    GATILHOS_DATA = ["que dia é hoje", "que dia é", "qual o dia de hoje", "qual a data de hoje", "que dia"]
+    GATILHOS_CALCULAR = ["calcular"]
+    GATILHOS_RECONHECER_FACE = ["reconhecer face", "quem sou eu", "reconheça minha face", "reconhece minha face"]
+    GATILHOS_CADASTRAR_FACE = ["cadastrar rosto", "cadastra um rosto", "cadastra rosto", "novo rosto", "criar rosto"]
+    GATILHOS_CLIMA = ["clima", "previsão do tempo", "previsao do tempo", "qual o clima", "vai chover"]
+    GATILHOS_LIGAR_LUZ = ["ligar luz", "acender luz", "acende a luz"]
+    GATILHOS_DESLIGAR_LUZ = ["desligar luz", "apagar luz", "apaga a luz"]
+
     # Operadores aceitos na calculadora por voz (chave -> função)
     OPERADORES = {
         "multiplicado por": lambda a, b: a * b,
@@ -138,29 +151,36 @@ class AssistenteVirtual:
             self.falar("Sim, como posso ajudar?")
             return
 
-        if "cadastrar evento" in comando:
+        if self._bateu_gatilho(comando, self.GATILHOS_CADASTRAR_EVENTO):
             self.cadastrar_evento()
-        elif "ler agenda" in comando:
+        elif self._bateu_gatilho(comando, self.GATILHOS_LER_AGENDA):
             self.ler_agenda()
-        elif "limpar agenda" in comando:
+        elif self._bateu_gatilho(comando, self.GATILHOS_LIMPAR_AGENDA):
             self.limpar_agenda()
-        elif "que horas" in comando:
+        elif self._bateu_gatilho(comando, self.GATILHOS_HORA):
             self.falar_hora()
-        elif "que dia" in comando:
+        elif self._bateu_gatilho(comando, self.GATILHOS_DATA):
             self.falar_data()
-        elif "calcular" in comando:
+        elif self._bateu_gatilho(comando, self.GATILHOS_CALCULAR):
             self.calcular(comando)
-        elif "reconhecer face" in comando or "quem sou eu" in comando:
+        elif self._bateu_gatilho(comando, self.GATILHOS_RECONHECER_FACE):
             self.reconhecer_face()
-        elif "cadastrar rosto" in comando or "cadastrar face" in comando or "novo rosto" in comando:
+        elif self._bateu_gatilho(comando, self.GATILHOS_CADASTRAR_FACE):
             self.cadastrar_rosto()
-        elif "clima" in comando or "previsão do tempo" in comando or "previsao do tempo" in comando:
+        elif self._bateu_gatilho(comando, self.GATILHOS_CLIMA):
             self.falar_previsao_tempo(comando)
-        elif "ligar luz" in comando or "desligar luz" in comando:
-            self.controlar_luz(comando)
+        elif self._bateu_gatilho(comando, self.GATILHOS_LIGAR_LUZ):
+            self.controlar_luz("ligar")
+        elif self._bateu_gatilho(comando, self.GATILHOS_DESLIGAR_LUZ):
+            self.controlar_luz("desligar")
         else:
             # Nenhum comando fixo bateu -> cai para a IA generativa (item 9)
             self.perguntar_ia(comando)
+
+    @staticmethod
+    def _bateu_gatilho(comando, gatilhos):
+        """Verifica se algum dos gatilhos de um comando está presente no texto falado."""
+        return any(gatilho in comando for gatilho in gatilhos)
 
     # ------------------------------------------------------------------
     # Itens 2 e 3: agenda
