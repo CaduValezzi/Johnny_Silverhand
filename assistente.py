@@ -25,6 +25,8 @@ console, sem nenhuma ação.
 
 import os
 import re
+import subprocess
+import sys
 import time
 from datetime import datetime
 
@@ -45,16 +47,7 @@ class AssistenteVirtual:
 
     # Palavras que ativam a assistente (aceita o nome completo ou o apelido)
     PALAVRAS_ATIVACAO = ["johnny silverhand", "johnny"]
-    GATILHOS_CADASTRAR_EVENTO = ["cadastrar evento", "cadastra um evento", "cadastra evento", "novo evento", "criar evento"]
-    GATILHOS_LER_AGENDA = ["ler agenda", "leia a agenda", "ler minha agenda", "mostrar agenda", "quais são meus eventos"]
-    GATILHOS_LIMPAR_AGENDA = ["limpar agenda", "apagar a agenda", "apagar agenda", "limpar minha agenda", "zerar agenda"]
-    GATILHOS_HORA = ["que horas são", "que horas é", "me diz as horas", "qual é a hora", "que horas"]
-    GATILHOS_DATA = ["que dia é hoje", "que dia é", "qual o dia de hoje", "qual a data de hoje", "que dia"]
-    GATILHOS_CALCULAR = ["calcular"]
-    GATILHOS_RECONHECER_FACE = ["reconhecer face", "quem sou eu", "reconheça minha face", "reconhece minha face"]
-    GATILHOS_CLIMA = ["clima", "previsão do tempo", "previsao do tempo", "qual o clima", "vai chover"]
-    GATILHOS_LIGAR_LUZ = ["ligar luz", "acender luz", "acende a luz"]
-    GATILHOS_DESLIGAR_LUZ = ["desligar luz", "apagar luz", "apaga a luz"]
+
     # Operadores aceitos na calculadora por voz (chave -> função)
     OPERADORES = {
         "multiplicado por": lambda a, b: a * b,
@@ -73,7 +66,7 @@ class AssistenteVirtual:
         # --- Reconhecimento e síntese de voz ---
         self.reconhecedor = sr.Recognizer()
         self.reconhecedor.pause_threshold = 1.2
-        self.reconhecedor.non_speaking_duration = 1
+        self.reconhecedor.non_speaking_duration = 0.5
 
         self.motor_voz = pyttsx3.init()
         self.motor_voz.setProperty("rate", 180)
@@ -145,22 +138,26 @@ class AssistenteVirtual:
             self.falar("Sim, como posso ajudar?")
             return
 
-        if any(gatilho in comando for gatilho in self.GATILHOS_CADASTRAR_EVENTO):
+        if "cadastrar evento" in comando:
             self.cadastrar_evento()
-        elif any(gatilho in comando for gatilho in self.GATILHOS_LER_AGENDA):
+        elif "ler agenda" in comando:
             self.ler_agenda()
-        elif any(gatilho in comando for gatilho in self.GATILHOS_LIMPAR_AGENDA):
+        elif "limpar agenda" in comando:
             self.limpar_agenda()
-        elif any(gatilho in comando for gatilho in self.GATILHOS_HORA):
+        elif "que horas" in comando:
             self.falar_hora()
-        elif any(gatilho in comando for gatilho in self.GATILHOS_DATA):
+        elif "que dia" in comando:
             self.falar_data()
-        elif any(gatilho in comando for gatilho in self.GATILHOS_CALCULAR):
+        elif "calcular" in comando:
             self.calcular(comando)
-        elif any(gatilho in comando for gatilho in self.GATILHOS_RECONHECER_FACE):
+        elif "reconhecer face" in comando or "quem sou eu" in comando:
             self.reconhecer_face()
-        elif any(gatilho in comando for gatilho in self.GATILHOS_CLIMA):
+        elif "cadastrar rosto" in comando or "cadastrar face" in comando or "novo rosto" in comando:
+            self.cadastrar_rosto()
+        elif "clima" in comando or "previsão do tempo" in comando or "previsao do tempo" in comando:
             self.falar_previsao_tempo(comando)
+        elif "ligar luz" in comando or "desligar luz" in comando:
+            self.controlar_luz(comando)
         else:
             # Nenhum comando fixo bateu -> cai para a IA generativa (item 9)
             self.perguntar_ia(comando)
@@ -196,16 +193,6 @@ class AssistenteVirtual:
         for evento in eventos:
             self.falar(evento)
 
-    def limpar_agenda(self):
-        """Apaga o conteúdo de agenda.txt sem excluir o arquivo em si."""
-        if not os.path.exists(self.arquivo_agenda) or os.path.getsize(self.arquivo_agenda) == 0:
-            self.falar("Sua agenda já está vazia.")
-            return
-
-        with open(self.arquivo_agenda, "w", encoding="utf-8"):
-            pass  # abrir em modo "w" já trunca o arquivo, sem precisar escrever nada
-
-        self.falar("Agenda limpa com sucesso.")
     # ------------------------------------------------------------------
     # Item 4 e 5: hora e data
     # ------------------------------------------------------------------
@@ -303,6 +290,29 @@ class AssistenteVirtual:
             self.falar(f"Você é {nome_reconhecido}!")
         else:
             self.falar("Não consegui reconhecer você.")
+
+    def cadastrar_rosto(self):
+        """Executa capturar_rosto.py (captura de amostras) e, em seguida,
+        treinar_modelo.py (retreino), atualizando o reconhecimento facial
+        sem precisar sair do assistente."""
+        self.falar("Vamos cadastrar um novo rosto. Olhe pro terminal e digite o nome quando for solicitado.")
+
+        resultado_captura = subprocess.run([sys.executable, "capturar_rosto.py"])
+        if resultado_captura.returncode != 0:
+            self.falar("Houve um problema durante a captura das amostras.")
+            return
+
+        self.falar("Captura concluída. Agora vou treinar o modelo com o novo rosto.")
+
+        resultado_treino = subprocess.run([sys.executable, "treinar_modelo.py"])
+        if resultado_treino.returncode != 0:
+            self.falar("Houve um problema ao treinar o modelo.")
+            return
+
+        # recarrega o modelo e o mapa de nomes em memória, sem precisar reiniciar o assistente
+        self.mapa_nomes = self._carregar_mapa_nomes()
+        self.modelo_carregado = self._carregar_modelo_facial()
+        self.falar("Novo rosto cadastrado e modelo atualizado com sucesso.")
 
     # ------------------------------------------------------------------
     # Item 9: IA generativa (Groq) - fallback para perguntas abertas
@@ -406,6 +416,9 @@ if __name__ == "__main__":
         except FileNotFoundError:
             print(f"Aviso: arquivo '{caminho}' não encontrado. Crie esse arquivo com sua chave da Groq dentro.")
             return None
+
+    # A porta do Arduino é opcional -- ex: "COM3" no Windows ou "/dev/ttyUSB0" no
+    # Linux; deixe None se não for usar o comando de luz.
     assistente = AssistenteVirtual(
         groq_api_key=carregar_chave_groq(),
         porta_arduino=None,
