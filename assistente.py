@@ -45,7 +45,16 @@ class AssistenteVirtual:
 
     # Palavras que ativam a assistente (aceita o nome completo ou o apelido)
     PALAVRAS_ATIVACAO = ["johnny silverhand", "johnny"]
-
+    GATILHOS_CADASTRAR_EVENTO = ["cadastrar evento", "cadastra um evento", "cadastra evento", "novo evento", "criar evento"]
+    GATILHOS_LER_AGENDA = ["ler agenda", "leia a agenda", "ler minha agenda", "mostrar agenda", "quais são meus eventos"]
+    GATILHOS_LIMPAR_AGENDA = ["limpar agenda", "apagar a agenda", "apagar agenda", "limpar minha agenda", "zerar agenda"]
+    GATILHOS_HORA = ["que horas são", "que horas é", "me diz as horas", "qual é a hora", "que horas"]
+    GATILHOS_DATA = ["que dia é hoje", "que dia é", "qual o dia de hoje", "qual a data de hoje", "que dia"]
+    GATILHOS_CALCULAR = ["calcular"]
+    GATILHOS_RECONHECER_FACE = ["reconhecer face", "quem sou eu", "reconheça minha face", "reconhece minha face"]
+    GATILHOS_CLIMA = ["clima", "previsão do tempo", "previsao do tempo", "qual o clima", "vai chover"]
+    GATILHOS_LIGAR_LUZ = ["ligar luz", "acender luz", "acende a luz"]
+    GATILHOS_DESLIGAR_LUZ = ["desligar luz", "apagar luz", "apaga a luz"]
     # Operadores aceitos na calculadora por voz (chave -> função)
     OPERADORES = {
         "multiplicado por": lambda a, b: a * b,
@@ -64,7 +73,7 @@ class AssistenteVirtual:
         # --- Reconhecimento e síntese de voz ---
         self.reconhecedor = sr.Recognizer()
         self.reconhecedor.pause_threshold = 1.2
-        self.reconhecedor.non_speaking_duration = 0.5
+        self.reconhecedor.non_speaking_duration = 1
 
         self.motor_voz = pyttsx3.init()
         self.motor_voz.setProperty("rate", 180)
@@ -136,24 +145,22 @@ class AssistenteVirtual:
             self.falar("Sim, como posso ajudar?")
             return
 
-        if "cadastrar evento" in comando:
+        if any(gatilho in comando for gatilho in self.GATILHOS_CADASTRAR_EVENTO):
             self.cadastrar_evento()
-        elif "ler agenda" in comando:
+        elif any(gatilho in comando for gatilho in self.GATILHOS_LER_AGENDA):
             self.ler_agenda()
-        elif "limpar agenda" in comando:
+        elif any(gatilho in comando for gatilho in self.GATILHOS_LIMPAR_AGENDA):
             self.limpar_agenda()
-        elif "que horas" in comando:
+        elif any(gatilho in comando for gatilho in self.GATILHOS_HORA):
             self.falar_hora()
-        elif "que dia" in comando:
+        elif any(gatilho in comando for gatilho in self.GATILHOS_DATA):
             self.falar_data()
-        elif "calcular" in comando:
+        elif any(gatilho in comando for gatilho in self.GATILHOS_CALCULAR):
             self.calcular(comando)
-        elif "reconhecer face" in comando or "quem sou eu" in comando:
+        elif any(gatilho in comando for gatilho in self.GATILHOS_RECONHECER_FACE):
             self.reconhecer_face()
-        elif "clima" in comando or "previsão do tempo" in comando or "previsao do tempo" in comando:
+        elif any(gatilho in comando for gatilho in self.GATILHOS_CLIMA):
             self.falar_previsao_tempo(comando)
-        elif "ligar luz" in comando or "desligar luz" in comando:
-            self.controlar_luz(comando)
         else:
             # Nenhum comando fixo bateu -> cai para a IA generativa (item 9)
             self.perguntar_ia(comando)
@@ -189,6 +196,16 @@ class AssistenteVirtual:
         for evento in eventos:
             self.falar(evento)
 
+    def limpar_agenda(self):
+        """Apaga o conteúdo de agenda.txt sem excluir o arquivo em si."""
+        if not os.path.exists(self.arquivo_agenda) or os.path.getsize(self.arquivo_agenda) == 0:
+            self.falar("Sua agenda já está vazia.")
+            return
+
+        with open(self.arquivo_agenda, "w", encoding="utf-8"):
+            pass  # abrir em modo "w" já trunca o arquivo, sem precisar escrever nada
+
+        self.falar("Agenda limpa com sucesso.")
     # ------------------------------------------------------------------
     # Item 4 e 5: hora e data
     # ------------------------------------------------------------------
@@ -381,12 +398,16 @@ class AssistenteVirtual:
 
 
 if __name__ == "__main__":
-    # Configure sua chave da Groq como variável de ambiente GROQ_API_KEY
-    # (ou passe diretamente em groq_api_key=""). A porta do Arduino é opcional
-    # -- ex: "COM3" no Windows ou "/dev/ttyUSB0" no Linux; deixe None se não
-    # for usar o comando de luz.
+    def carregar_chave_groq(caminho="api_AI.txt"):
+        """Lê a chave da API da Groq de um arquivo de texto simples (1 linha, só a chave)."""
+        try:
+            with open(caminho, "r", encoding="utf-8") as arquivo:
+                return arquivo.read().strip()
+        except FileNotFoundError:
+            print(f"Aviso: arquivo '{caminho}' não encontrado. Crie esse arquivo com sua chave da Groq dentro.")
+            return None
     assistente = AssistenteVirtual(
-        groq_api_key=None,
+        groq_api_key=carregar_chave_groq(),
         porta_arduino=None,
         cidade_padrao="Santo André",
     )

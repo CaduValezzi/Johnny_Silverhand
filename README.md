@@ -15,7 +15,7 @@ Projeto acadêmico de assistente virtual por voz, inspirado no Google Assistente
 | 7 | `"Johnny reconhecer face"` / `"Johnny quem sou eu"` | Abre a webcam e tenta identificar a pessoa. |
 | 8 | `"Johnny limpar agenda"` | Apaga o conteúdo de `agenda.txt` sem excluir o arquivo. |
 | 9 | Qualquer pergunta aberta | Cai como *fallback* para a IA generativa (Groq). |
-| 10 | `"Johnny qual o clima"` / `"Johnny ligar luz"` / `"Johnny desligar luz"` | Extras: previsão do tempo e controle de um LED via Arduino. |
+| 10 | `"Johnny qual o clima"` | Extras: previsão do tempo. |
 
 ## Estrutura do projeto
 
@@ -32,6 +32,10 @@ assistente-johnny/
     └── mapa_nomes.txt         # gerado por treinar_modelo.py
 ```
 
+## Requisitos
+
+- **Python 3.12** (recomendado). O PyAudio só tem wheels pré-compiladas para Windows até o Python 3.13; em versões mais novas (3.14+) a instalação tende a falhar por falta de wheel pronta.
+
 ## Instalação
 
 1. Clone o repositório e entre na pasta:
@@ -40,13 +44,18 @@ assistente-johnny/
    cd assistente-johnny
    ```
 
-2. (Recomendado) crie um ambiente virtual:
+2. Se não tiver o Python 3.12 instalado, no Windows dá pra instalar direto pelo terminal:
    ```bash
-   python -m venv venv
-   source venv/bin/activate   # Windows: venv\Scripts\activate
+   winget install Python.Python.3.12
    ```
 
-3. Instale as dependências:
+3. Crie o ambiente virtual usando essa versão:
+   ```bash
+   py -3.12 -m venv venv
+   venv\Scripts\activate   # Linux/macOS: source venv/bin/activate
+   ```
+
+4. Instale as dependências:
    ```bash
    pip install -r requirements.txt
    ```
@@ -54,10 +63,15 @@ assistente-johnny/
    > No Windows, se `pip install pyaudio` falhar, instale o pacote pré-compilado com
    > `pip install pipwin && pipwin install pyaudio`, ou baixe o wheel correspondente.
 
-4. Configure sua chave da API da Groq (gratuita em [console.groq.com](https://console.groq.com)):
-   ```bash
-   export GROQ_API_KEY="sua_chave_aqui"      # Windows: set GROQ_API_KEY=sua_chave_aqui
+   > **Atenção:** o `requirements.txt` já fixa `opencv-contrib-python==4.13.0.92` de propósito.
+   > A versão 5.0.0.93 (mais recente) tem um [bug conhecido](https://github.com/opencv/opencv-python/issues/1244)
+   > que faz a pasta `cv2/data` vir vazia, quebrando o reconhecimento facial (sem os arquivos `haarcascade_*.xml`).
+
+5. Configure sua chave da API da Groq (gratuita em [console.groq.com](https://console.groq.com)) criando um arquivo `api_AI.txt` na raiz do projeto, com **apenas a chave** dentro, sem espaços ou aspas:
    ```
+   gsk_sua_chave_aqui
+   ```
+   Esse arquivo já está no `.gitignore`, então não vai parar no seu repositório público.
 
 ## Como treinar o reconhecimento facial (item 7)
 

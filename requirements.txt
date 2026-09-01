@@ -3,7 +3,7 @@ PyAudio
 pyttsx3
 gTTS
 pygame
-opencv-contrib-python
+opencv-contrib-python==4.13.0.92
 numpy
 groq
 requests
