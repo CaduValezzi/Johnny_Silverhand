@@ -1,0 +1,10 @@
+SpeechRecognition
+PyAudio
+pyttsx3
+gTTS
+pygame
+opencv-contrib-python
+numpy
+groq
+requests
+pyserial
