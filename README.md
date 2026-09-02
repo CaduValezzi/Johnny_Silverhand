@@ -40,7 +40,7 @@ assistente-johnny/
 
 1. Clone o repositório e entre na pasta:
    ```bash
-   git clone <url-do-seu-repositorio>
+   git clone [https://github.com/CaduValezzi/Johnny_Silverhand.git](https://github.com/CaduValezzi/Johnny_Silverhand.git)
    cd assistente-johnny
    ```
 
