@@ -81,10 +81,10 @@ assistente-johnny/
 
 Duas formas de fazer isso:
 
-**Pelo assistente (recomendado):** com o `assistente.py` rodando, diga *"Johnny cadastrar rosto"*. Ele pergunta o nome por voz, chama `capturar_rosto.py` (pressione `q` repetidas vezes com o rosto enquadrado até completar 25 fotos) e, na sequência, `treinar_modelo.py` automaticamente — recarregando o modelo sem precisar reiniciar.
+**Pelo assistente (recomendado):** com o `assistente.py` rodando, diga *"Johnny cadastrar rosto"*. Ele pergunta o nome por voz e começa a captura automaticamente — não abre nenhuma janela de câmera nem precisa apertar tecla, basta manter o rosto enquadrado e virar levemente a cabeça pros lados. O próprio assistente narra o andamento ("começando a captura", "metade das fotos capturadas"...) e, ao terminar as 25 fotos, treina o modelo na sequência sozinho, recarregando tudo sem precisar reiniciar.
 
 **Manualmente, rodando os scripts direto:**
-1. `python capturar_rosto.py` (pergunta o nome no terminal) ou `python capturar_rosto.py nome_da_pessoa` (pula a pergunta)
+1. `python capturar_rosto.py` (pergunta o nome no terminal) ou `python capturar_rosto.py nome_da_pessoa` (pula a pergunta). Nesse modo, abre uma janela com o vídeo pra você se enquadrar; a captura em si continua automática — sem precisar apertar tecla nenhuma, exceto `q` se quiser cancelar antes de terminar.
 2. Capture também amostras de rostos aleatórios com o nome `desconhecido`, para o modelo aprender a rejeitar quem não está cadastrado.
 3. `python treinar_modelo.py` — gera `classificador_eigen.yml` e `rostos/mapa_nomes.txt`.
 
@@ -121,3 +121,8 @@ O Arduino deve estar programado para ligar/desligar um LED ao receber os bytes `
 - No Windows, a webcam é aberta com o backend DirectShow (`cv2.CAP_DSHOW`) em vez do padrão MSMF, que é bem mais lento pra inicializar. Em Linux/macOS isso é detectado automaticamente e ignorado.
 - A voz principal (edge-tts) precisa de internet — o mesmo vale pro reconhecimento de voz (Google) e pra IA generativa (Groq), então isso não é uma dependência nova pro projeto.
 - Pra trocar a voz, edite a constante `VOZ_EDGE_TTS` no topo da classe `AssistenteVirtual`. Masculina: `"pt-BR-AntonioNeural"` (padrão); feminina: `"pt-BR-FranciscaNeural"`. Rode `edge-tts --list-voices | findstr pt-BR` (Windows) para ver todas as opções em português.
+- O reconhecimento facial (`reconhecer_face`) combina até 15 leituras seguidas da câmera e decide por votação (a resposta mais frequente entre elas), em vez de confiar numa única leitura isolada. Rostos não cadastrados — ou com confiança abaixo do limiar definido em `LIMITE_CONFIANCA_FACE` — são sempre classificados como "desconhecido".
+
+## Autor
+
+Cadu — projeto acadêmico.

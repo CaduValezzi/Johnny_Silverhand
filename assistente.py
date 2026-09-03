@@ -6,12 +6,12 @@ Google Assistente / Alexa.
 
 Funcionalidades implementadas:
  1. Ativação por palavra-chave ("Johnny Silverhand" ou apenas "Johnny")
- 2. Cadastro de evento na agenda (agenda.txt)
- 3. Leitura da agenda
+ 2. Cadastro de evento na agenda, com dia e horário (agenda.txt)
+ 3. Leitura da agenda (nome do evento, dia e horário)
  4. Consulta do horário atual
  5. Consulta da data atual
  6. Calculadora por voz (adição, subtração, multiplicação, divisão)
- 7. Reconhecimento facial (OpenCV EigenFaceRecognizer)
+ 7. Reconhecimento facial (OpenCV EigenFaceRecognizer), sem abrir janela de câmera
  8. Limpeza da agenda (sem apagar o arquivo)
  9. Integração com IA generativa (Groq) como fallback para perguntas abertas
  10. Extras (desafio do grupo):
@@ -21,6 +21,12 @@ Funcionalidades implementadas:
 Qualquer comando só é aceito depois que a palavra de ativação é reconhecida
 na mesma fala. Caso contrário, o texto reconhecido é apenas exibido no
 console, sem nenhuma ação.
+
+Arquitetura: os comandos de voz são modelados com o padrão Command (classe
+Comando): cada um encapsula seus gatilhos de fala e a ação a executar. O
+roteamento em AssistenteVirtual.processar_comando() percorre essa lista em
+vez de uma cadeia grande de if/elif, o que deixa mais simples adicionar,
+remover ou reorganizar comandos.
 """
 
 import asyncio
@@ -30,7 +36,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import cv2
 import edge_tts
@@ -39,6 +45,8 @@ import requests
 import speech_recognition as sr
 from groq import Groq
 from pygame import mixer
+
+import capturar_rosto
 
 try:
     import serial  # pyserial - só é necessário se for usar o Arduino
@@ -50,6 +58,30 @@ except ImportError:
 # backend automático, já que CAP_DSHOW só existe no Windows.
 BACKEND_CAMERA = cv2.CAP_DSHOW if sys.platform.startswith("win") else cv2.CAP_ANY
 
+# Usado para reconhecer datas faladas por extenso (ex: "dia 15 de setembro")
+MESES_PT = {
+    "janeiro": 1, "fevereiro": 2, "março": 3, "marco": 3, "abril": 4,
+    "maio": 5, "junho": 6, "julho": 7, "agosto": 8, "setembro": 9,
+    "outubro": 10, "novembro": 11, "dezembro": 12,
+}
+
+
+class Comando:
+    """Representa um comando de voz (padrão Command): guarda os gatilhos de
+    fala que o ativam e a ação a executar quando reconhecido."""
+
+    def __init__(self, nome, gatilhos, acao):
+        self.nome = nome
+        self.gatilhos = gatilhos
+        self.acao = acao  # função que recebe (texto_comando) e executa a ação
+
+    def bate_com(self, texto_comando):
+        """Verifica se algum dos gatilhos deste comando está no texto falado."""
+        return any(gatilho in texto_comando for gatilho in self.gatilhos)
+
+    def executar(self, texto_comando):
+        self.acao(texto_comando)
+
 
 class AssistenteVirtual:
     """Encapsula toda a lógica do assistente: ouvir, decidir, agir e falar."""
@@ -60,6 +92,10 @@ class AssistenteVirtual:
     # Voz usada pelo edge-tts (voz online principal). Vozes masculinas em pt-BR:
     # "pt-BR-AntonioNeural"; femininas: "pt-BR-FranciscaNeural".
     VOZ_EDGE_TTS = "pt-BR-AntonioNeural"
+
+    # Confiança máxima (quanto menor, mais parecido) pra considerar um rosto
+    # reconhecido. Acima disso, é tratado como "desconhecido".
+    LIMITE_CONFIANCA_FACE = 4000
 
     # Gatilhos de voz aceitos para cada comando (várias formas de falar a mesma coisa)
     GATILHOS_CADASTRAR_EVENTO = ["cadastrar evento", "cadastra um evento", "cadastra evento", "novo evento", "criar evento"]
@@ -85,6 +121,7 @@ class AssistenteVirtual:
         "-": lambda a, b: a - b,
         "x": lambda a, b: a * b,
         "/": lambda a, b: a / b,
+        "elevado": lambda a, b: a ** b,
     }
 
     def __init__(self, arquivo_agenda="agenda.txt", modelo_facial="classificador_eigen.yml",
@@ -121,6 +158,9 @@ class AssistenteVirtual:
         # --- Extras: clima e Arduino ---
         self.cidade_padrao = cidade_padrao
         self.arduino = self._conectar_arduino(porta_arduino)
+
+        # --- Comandos (padrão Command) ---
+        self.comandos = self._construir_comandos()
 
     # ------------------------------------------------------------------
     # Métodos utilitários de voz
@@ -176,7 +216,7 @@ class AssistenteVirtual:
             return None
 
     # ------------------------------------------------------------------
-    # Ativação e roteamento de comandos (item 1)
+    # Ativação e roteamento de comandos (item 1) - padrão Command
     # ------------------------------------------------------------------
     def contem_ativacao(self, texto):
         """Verifica se alguma palavra de ativação está presente no texto reconhecido."""
@@ -189,73 +229,147 @@ class AssistenteVirtual:
             comando = comando.replace(palavra, "")
         return comando.strip()
 
-    def processar_comando(self, comando):
-        """Roteia (dispatch) o comando reconhecido para o método correspondente."""
-        if not comando:
+    def _construir_comandos(self):
+        """Monta a lista de comandos disponíveis (padrão Command): cada item
+        associa os gatilhos de fala à ação correspondente. Adicionar um
+        comando novo é só incluir uma entrada nova nessa lista."""
+        return [
+            Comando("cadastrar_evento", self.GATILHOS_CADASTRAR_EVENTO, lambda texto: self.cadastrar_evento()),
+            Comando("ler_agenda", self.GATILHOS_LER_AGENDA, lambda texto: self.ler_agenda()),
+            Comando("limpar_agenda", self.GATILHOS_LIMPAR_AGENDA, lambda texto: self.limpar_agenda()),
+            Comando("hora", self.GATILHOS_HORA, lambda texto: self.falar_hora()),
+            Comando("data", self.GATILHOS_DATA, lambda texto: self.falar_data()),
+            Comando("calcular", self.GATILHOS_CALCULAR, lambda texto: self.calcular(texto)),
+            Comando("reconhecer_face", self.GATILHOS_RECONHECER_FACE, lambda texto: self.reconhecer_face()),
+            Comando("cadastrar_rosto", self.GATILHOS_CADASTRAR_FACE, lambda texto: self.cadastrar_rosto()),
+            Comando("clima", self.GATILHOS_CLIMA, lambda texto: self.falar_previsao_tempo(texto)),
+            Comando("ligar_luz", self.GATILHOS_LIGAR_LUZ, lambda texto: self.controlar_luz("ligar")),
+            Comando("desligar_luz", self.GATILHOS_DESLIGAR_LUZ, lambda texto: self.controlar_luz("desligar")),
+        ]
+
+    def processar_comando(self, comando_texto):
+        """Roteia o comando reconhecido: percorre os Comando cadastrados e
+        executa o primeiro cujo gatilho bater. Se nenhum bater, cai na IA
+        generativa (item 9)."""
+        if not comando_texto:
             self.falar("Sim, como posso ajudar?")
             return
 
-        if self._bateu_gatilho(comando, self.GATILHOS_CADASTRAR_EVENTO):
-            self.cadastrar_evento()
-        elif self._bateu_gatilho(comando, self.GATILHOS_LER_AGENDA):
-            self.ler_agenda()
-        elif self._bateu_gatilho(comando, self.GATILHOS_LIMPAR_AGENDA):
-            self.limpar_agenda()
-        elif self._bateu_gatilho(comando, self.GATILHOS_HORA):
-            self.falar_hora()
-        elif self._bateu_gatilho(comando, self.GATILHOS_DATA):
-            self.falar_data()
-        elif self._bateu_gatilho(comando, self.GATILHOS_CALCULAR):
-            self.calcular(comando)
-        elif self._bateu_gatilho(comando, self.GATILHOS_RECONHECER_FACE):
-            self.reconhecer_face()
-        elif self._bateu_gatilho(comando, self.GATILHOS_CADASTRAR_FACE):
-            self.cadastrar_rosto()
-        elif self._bateu_gatilho(comando, self.GATILHOS_CLIMA):
-            self.falar_previsao_tempo(comando)
-        elif self._bateu_gatilho(comando, self.GATILHOS_LIGAR_LUZ):
-            self.controlar_luz("ligar")
-        elif self._bateu_gatilho(comando, self.GATILHOS_DESLIGAR_LUZ):
-            self.controlar_luz("desligar")
-        else:
-            # Nenhum comando fixo bateu -> cai para a IA generativa (item 9)
-            self.perguntar_ia(comando)
+        for comando in self.comandos:
+            if comando.bate_com(comando_texto):
+                comando.executar(comando_texto)
+                return
 
-    @staticmethod
-    def _bateu_gatilho(comando, gatilhos):
-        """Verifica se algum dos gatilhos de um comando está presente no texto falado."""
-        return any(gatilho in comando for gatilho in gatilhos)
+        self.perguntar_ia(comando_texto)
 
     # ------------------------------------------------------------------
-    # Itens 2 e 3: agenda
+    # Itens 2 e 3: agenda (com dia e horário)
     # ------------------------------------------------------------------
     def cadastrar_evento(self):
-        """Pergunta o evento, escuta a resposta e grava em agenda.txt."""
-        self.falar("Ok, qual evento devo cadastrar?")
-        evento = self.ouvir(timeout=8, phrase_time_limit=15)
+        """Pergunta o evento (e tenta extrair dia/horário da mesma resposta);
+        se não encontrar, pergunta separadamente. Grava tudo em agenda.txt no
+        formato 'evento | data | hora'."""
+        self.falar("Ok, qual evento devo cadastrar, e para quando?")
+        descricao = self.ouvir(timeout=8, phrase_time_limit=15)
 
-        if not evento:
+        if not descricao:
             self.falar("Não consegui te ouvir, tente novamente.")
             return
 
-        data_hora = datetime.now().strftime("%d/%m/%Y %H:%M")
-        with open(self.arquivo_agenda, "a", encoding="utf-8") as arquivo:
-            arquivo.write(f"[{data_hora}] {evento}\n")
+        data_evento = self._extrair_data(descricao)
+        hora_evento = self._extrair_hora(descricao)
+        nome_evento = self._limpar_nome_evento(descricao)
 
-        self.falar("Evento cadastrado com sucesso.")
+        if not data_evento:
+            self.falar("Para qual dia é esse evento?")
+            resposta = self.ouvir(timeout=8, phrase_time_limit=10)
+            data_evento = self._extrair_data(resposta or "") or (resposta or "não informado")
+
+        if not hora_evento:
+            self.falar("E que horas?")
+            resposta = self.ouvir(timeout=8, phrase_time_limit=10)
+            hora_evento = self._extrair_hora(resposta or "") or (resposta or "não informado")
+
+        with open(self.arquivo_agenda, "a", encoding="utf-8") as arquivo:
+            arquivo.write(f"{nome_evento} | {data_evento} | {hora_evento}\n")
+
+        self.falar(f"Evento {nome_evento} cadastrado para {data_evento} às {hora_evento}.")
 
     def ler_agenda(self):
-        """Lê e fala todos os eventos gravados em agenda.txt."""
+        """Lê e fala nome, data e hora de todos os eventos gravados em agenda.txt."""
         if not os.path.exists(self.arquivo_agenda) or os.path.getsize(self.arquivo_agenda) == 0:
             self.falar("Sua agenda está vazia.")
             return
 
         with open(self.arquivo_agenda, "r", encoding="utf-8") as arquivo:
-            eventos = [linha.strip() for linha in arquivo if linha.strip()]
+            linhas = [linha.strip() for linha in arquivo if linha.strip()]
 
-        self.falar(f"Você tem {len(eventos)} evento{'s' if len(eventos) != 1 else ''} cadastrado{'s' if len(eventos) != 1 else ''}.")
-        for evento in eventos:
-            self.falar(evento)
+        self.falar(f"Você tem {len(linhas)} evento{'s' if len(linhas) != 1 else ''} cadastrado{'s' if len(linhas) != 1 else ''}.")
+        for linha in linhas:
+            partes = linha.split(" | ")
+            if len(partes) == 3:
+                nome, data, hora = partes
+                self.falar(f"{nome}, dia {data}, às {hora}.")
+            else:
+                # compatibilidade com entradas no formato antigo (sem data/hora separadas)
+                self.falar(linha)
+
+    def limpar_agenda(self):
+        """Remove todos os eventos da agenda, mas mantém o arquivo agenda.txt."""
+        try:
+            # Abre o arquivo no modo "w", apagando apenas o conteúdo.
+            # O arquivo continua existindo.
+            with open(self.arquivo_agenda, "w", encoding="utf-8") as arquivo:
+                arquivo.truncate(0)
+
+            self.falar("Agenda limpa com sucesso.")
+
+        except Exception as erro:
+            # print(f"Erro ao limpar agenda: {erro}")
+            self.falar("Não consegui limpar a agenda.")
+
+    def _extrair_data(self, texto):
+        """Tenta reconhecer uma data no texto falado (dd/mm[/aaaa], 'dia X de mês',
+        'hoje' ou 'amanhã'). Retorna None se não encontrar nada reconhecível."""
+        match = re.search(r"(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?", texto)
+        if match:
+            dia, mes, ano = match.groups()
+            ano = ano or str(datetime.now().year)
+            return f"{int(dia):02d}/{int(mes):02d}/{ano}"
+
+        match = re.search(r"dia\s+(\d{1,2})\s+de\s+(\w+)", texto)
+        if match:
+            dia, mes_nome = match.groups()
+            mes_numero = MESES_PT.get(mes_nome.lower())
+            if mes_numero:
+                return f"{int(dia):02d}/{mes_numero:02d}/{datetime.now().year}"
+
+        if "amanhã" in texto or "amanha" in texto:
+            return (datetime.now() + timedelta(days=1)).strftime("%d/%m/%Y")
+        if "hoje" in texto:
+            return datetime.now().strftime("%d/%m/%Y")
+
+        return None
+
+    def _extrair_hora(self, texto):
+        """Tenta reconhecer um horário no texto falado (ex: '14h', '14:30', '14 horas')."""
+        match = re.search(r"(\d{1,2})\s*(?:h|horas|:)\s*(\d{2})?", texto)
+        if match:
+            hora, minuto = match.groups()
+            minuto = minuto or "00"
+            return f"{int(hora):02d}:{minuto}"
+        return None
+
+    def _limpar_nome_evento(self, texto):
+        """Remove trechos de data/hora e palavras de conexão do texto falado,
+        deixando só a descrição do evento em si."""
+        nome = texto
+        nome = re.sub(r"\d{1,2}/\d{1,2}(?:/\d{2,4})?", "", nome)
+        nome = re.sub(r"dia\s+\d{1,2}\s+de\s+\w+", "", nome)
+        nome = re.sub(r"\d{1,2}\s*(?:horas|hora|h|:)\s*\d{0,2}", "", nome)
+        nome = re.sub(r"\b(hoje|amanhã|amanha|às|as|para|no|dia)\b", "", nome)
+        nome = re.sub(r"\s{2,}", " ", nome).strip(" ,.-")
+        return nome or "evento sem nome"
 
     # ------------------------------------------------------------------
     # Item 4 e 5: hora e data
@@ -293,7 +407,7 @@ class AssistenteVirtual:
             self.falar("Não é possível dividir por zero.")
 
     # ------------------------------------------------------------------
-    # Item 7: reconhecimento facial
+    # Item 7: reconhecimento facial (sem abrir janela de câmera)
     # ------------------------------------------------------------------
     def _carregar_mapa_nomes(self):
         """Carrega o mapa rótulo numérico -> nome, gerado por treinar_modelo.py."""
@@ -315,50 +429,57 @@ class AssistenteVirtual:
         return False
 
     def reconhecer_face(self):
-        """Abre a webcam e tenta identificar a pessoa em frente à câmera."""
+        """Abre a webcam (sem exibir nenhuma janela) e tenta identificar a
+        pessoa em frente à câmera, combinando várias leituras seguidas
+        (votação) para reduzir erros de uma leitura isolada. Se a maioria
+        das leituras não bater com ninguém cadastrado, a pessoa é
+        considerada 'desconhecida'."""
         if not self.modelo_carregado:
             self.falar("Ainda não tenho um modelo treinado para reconhecer rostos.")
             return
 
         self.falar("Deixa eu dar uma olhada...")
         camera = cv2.VideoCapture(0, BACKEND_CAMERA)
-        nome_reconhecido = None
+        votos = []
         tentativas = 0
-        limite_tentativas = 60  # evita loop infinito se ninguém aparecer na câmera
+        limite_tentativas = 90  # tempo máximo esperando um rosto aparecer
+        total_leituras_desejado = 15  # quantas leituras usar pra decidir por votação
 
-        while tentativas < limite_tentativas:
-            ok, frame = camera.read()
-            if not ok:
-                break
+        try:
+            while tentativas < limite_tentativas and len(votos) < total_leituras_desejado:
+                ok, frame = camera.read()
+                if not ok:
+                    break
 
-            cinza = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            faces = self.classificador_face.detectMultiScale(cinza, scaleFactor=1.2, minSize=(150, 150))
+                cinza = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                faces = self.classificador_face.detectMultiScale(cinza, scaleFactor=1.2, minSize=(150, 150))
 
-            for (x, y, largura, altura) in faces:
-                rosto = cv2.resize(cinza[y:y + altura, x:x + largura], (220, 220))
-                rotulo, confianca = self.reconhecedor_facial.predict(rosto)
-                # confiança alta = pouco parecido -> trata como desconhecido
-                nome_reconhecido = self.mapa_nomes.get(rotulo, "desconhecido") if confianca <= 4000 else "desconhecido"
-                cv2.rectangle(frame, (x, y), (x + largura, y + altura), (0, 0, 255), 2)
-                break
+                for (x, y, largura, altura) in faces:
+                    rosto = cv2.resize(cinza[y:y + altura, x:x + largura], (220, 220))
+                    rotulo, confianca = self.reconhecedor_facial.predict(rosto)
+                    # confiança alta = pouco parecido -> trata como desconhecido
+                    nome = self.mapa_nomes.get(rotulo, "desconhecido") if confianca <= self.LIMITE_CONFIANCA_FACE else "desconhecido"
+                    votos.append(nome)
+                    break
 
-            cv2.imshow("Reconhecimento facial - pressione Q para sair", frame)
-            if nome_reconhecido or (cv2.waitKey(1) & 0xFF == ord("q")):
-                break
-            tentativas += 1
+                tentativas += 1
+        finally:
+            camera.release()
 
-        camera.release()
-        cv2.destroyAllWindows()
+        if not votos:
+            self.falar("Não consegui ver nenhum rosto.")
+            return
 
-        if nome_reconhecido and nome_reconhecido != "desconhecido":
-            self.falar(f"Você é {nome_reconhecido}!")
+        nome_mais_votado = max(set(votos), key=votos.count)
+        if nome_mais_votado != "desconhecido":
+            self.falar(f"Você é {nome_mais_votado}!")
         else:
-            self.falar("Não consegui reconhecer você.")
+            self.falar("Rosto não reconhecido. Você consta como desconhecido.")
 
     def cadastrar_rosto(self):
-        """Pergunta o nome por voz e executa capturar_rosto.py (captura de
-        amostras) e, em seguida, treinar_modelo.py (retreino), atualizando o
-        reconhecimento facial sem precisar sair do assistente."""
+        """Pergunta o nome por voz e captura as amostras de rosto
+        automaticamente (sem precisar de tecla ou janela de câmera),
+        narrando o progresso, e depois treina o modelo com o novo rosto."""
         self.falar("Qual o nome da pessoa que eu devo cadastrar?")
         nome = self.ouvir(timeout=8, phrase_time_limit=8)
 
@@ -367,24 +488,45 @@ class AssistenteVirtual:
             return
 
         nome = nome.replace(" ", "")  # evita espaços no nome do arquivo de amostra
-        self.falar(f"Ok, vamos capturar o rosto de {nome}. Olhe pra câmera e pressione 'q' quando o rosto estiver enquadrado.")
+        self.falar(
+            f"Ok, vamos capturar o rosto de {nome}. Olhe para a câmera, mantenha o rosto "
+            "enquadrado fique com a cabeça parada. Começando "
+            "capturadas"
+        )
 
-        resultado_captura = subprocess.run([sys.executable, "capturar_rosto.py", nome])
-        if resultado_captura.returncode != 0:
+        try:
+            capturar_rosto.capturar_amostras(
+                nome,
+                callback_progresso=self._narrar_progresso_captura,
+                mostrar_janela=False,
+            )
+        except Exception as erro:
+            print(f"Erro durante a captura de rosto: {erro}")
             self.falar("Houve um problema durante a captura das amostras.")
             return
 
-        self.falar("Captura concluída. Agora vou treinar o modelo com o novo rosto.")
+        self.falar(f"Captura concluída. Adicionando rosto de {nome} a memória.")
 
         resultado_treino = subprocess.run([sys.executable, "treinar_modelo.py"])
         if resultado_treino.returncode != 0:
-            self.falar("Houve um problema ao treinar o modelo.")
+            self.falar("Houve um problema ao adicionar rosto.")
             return
 
         # recarrega o modelo e o mapa de nomes em memória, sem precisar reiniciar o assistente
         self.mapa_nomes = self._carregar_mapa_nomes()
         self.modelo_carregado = self._carregar_modelo_facial()
         self.falar(f"{nome} cadastrado e modelo atualizado com sucesso.")
+
+    def _narrar_progresso_captura(self, amostra_atual, total_amostras):
+        """Callback chamado a cada foto salva por capturar_rosto.py, usado
+        pra narrar o andamento da captura por voz em alguns marcos."""
+        print(f"Amostra {amostra_atual}/{total_amostras} salva.")
+        if amostra_atual == 1:
+            self.falar("Começando a captura.")
+        elif amostra_atual == total_amostras // 2:
+            self.falar("Metade das capturadas. Continue.")
+        elif amostra_atual == total_amostras:
+            self.falar("Capturadas encerradas.")
 
     # ------------------------------------------------------------------
     # Item 9: IA generativa (Groq) - fallback para perguntas abertas
