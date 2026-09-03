@@ -45,7 +45,7 @@ assistente-johnny/
 1. Clone o repositório e entre na pasta:
 
    ```bash
-   git clone <url-do-seu-repositorio>
+   git clone [https://github.com/CaduValezzi/Johnny_Silverhand.git](https://github.com/CaduValezzi/Johnny_Silverhand.git)
    cd assistente-johnny
    ```
 2. Se não tiver o Python 3.12 instalado, no Windows dá pra instalar direto pelo terminal:
