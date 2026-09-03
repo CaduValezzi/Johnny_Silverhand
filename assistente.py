@@ -27,6 +27,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime
 
@@ -34,12 +35,19 @@ import cv2
 import pyttsx3
 import requests
 import speech_recognition as sr
+from gtts import gTTS
 from groq import Groq
+from pygame import mixer
 
 try:
     import serial  # pyserial - só é necessário se for usar o Arduino
 except ImportError:
     serial = None
+
+# No Windows, o backend padrão (MSMF) demora vários segundos pra abrir a
+# câmera; o DirectShow abre quase instantâneo. Em Linux/macOS mantemos o
+# backend automático, já que CAP_DSHOW só existe no Windows.
+BACKEND_CAMERA = cv2.CAP_DSHOW if sys.platform.startswith("win") else cv2.CAP_ANY
 
 
 class AssistenteVirtual:
@@ -81,9 +89,10 @@ class AssistenteVirtual:
         self.reconhecedor.pause_threshold = 1.2
         self.reconhecedor.non_speaking_duration = 0.5
 
-        self.motor_voz = pyttsx3.init()
-        self.motor_voz.setProperty("rate", 180)
-        self.motor_voz.setProperty("volume", 1.0)
+        self.motor_voz_offline = pyttsx3.init()
+        self.motor_voz_offline.setProperty("rate", 180)
+        self.motor_voz_offline.setProperty("volume", 1.0)
+        mixer.init()  # usado pela voz online (gTTS), que é a voz principal
 
         # --- Agenda ---
         self.arquivo_agenda = arquivo_agenda
@@ -108,10 +117,34 @@ class AssistenteVirtual:
     # Métodos utilitários de voz
     # ------------------------------------------------------------------
     def falar(self, texto):
-        """Converte texto em fala e também imprime no console (debug/apresentação)."""
+        """Converte texto em fala. Usa o gTTS (voz do Google, natural) como
+        principal e cai para o pyttsx3 offline se não houver internet."""
         print(f"[Johnny]: {texto}")
-        self.motor_voz.say(texto)
-        self.motor_voz.runAndWait()
+        try:
+            self._falar_online(texto)
+        except Exception as erro:
+            print(f"Aviso: falha na síntese de voz online ({erro}). Usando voz offline.")
+            self._falar_offline(texto)
+
+    def _falar_online(self, texto):
+        """Gera um áudio com gTTS e toca com o pygame. Requer internet."""
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as arquivo_temp:
+            caminho_audio = arquivo_temp.name
+
+        try:
+            gTTS(texto, lang="pt-br").save(caminho_audio)
+            mixer.music.load(caminho_audio)
+            mixer.music.play()
+            while mixer.music.get_busy():
+                time.sleep(0.1)
+            mixer.music.unload()
+        finally:
+            os.remove(caminho_audio)
+
+    def _falar_offline(self, texto):
+        """Plano B sem internet: síntese de voz local via pyttsx3 (SAPI5)."""
+        self.motor_voz_offline.say(texto)
+        self.motor_voz_offline.runAndWait()
 
     def ouvir(self, timeout=5, phrase_time_limit=8):
         """Captura áudio do microfone e devolve o texto reconhecido em minúsculas (ou None)."""
@@ -277,7 +310,7 @@ class AssistenteVirtual:
             return
 
         self.falar("Deixa eu dar uma olhada...")
-        camera = cv2.VideoCapture(0)
+        camera = cv2.VideoCapture(0, BACKEND_CAMERA)
         nome_reconhecido = None
         tentativas = 0
         limite_tentativas = 60  # evita loop infinito se ninguém aparecer na câmera
