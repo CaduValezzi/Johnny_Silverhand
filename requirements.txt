@@ -1,7 +1,7 @@
 SpeechRecognition
 PyAudio
 pyttsx3
-gTTS
+edge-tts
 pygame
 opencv-contrib-python==4.13.0.92
 numpy

@@ -23,6 +23,7 @@ na mesma fala. Caso contrário, o texto reconhecido é apenas exibido no
 console, sem nenhuma ação.
 """
 
+import asyncio
 import os
 import re
 import subprocess
@@ -32,10 +33,10 @@ import time
 from datetime import datetime
 
 import cv2
+import edge_tts
 import pyttsx3
 import requests
 import speech_recognition as sr
-from gtts import gTTS
 from groq import Groq
 from pygame import mixer
 
@@ -55,6 +56,10 @@ class AssistenteVirtual:
 
     # Palavras que ativam a assistente (aceita o nome completo ou o apelido)
     PALAVRAS_ATIVACAO = ["johnny silverhand", "johnny"]
+
+    # Voz usada pelo edge-tts (voz online principal). Vozes masculinas em pt-BR:
+    # "pt-BR-AntonioNeural"; femininas: "pt-BR-FranciscaNeural".
+    VOZ_EDGE_TTS = "pt-BR-AntonioNeural"
 
     # Gatilhos de voz aceitos para cada comando (várias formas de falar a mesma coisa)
     GATILHOS_CADASTRAR_EVENTO = ["cadastrar evento", "cadastra um evento", "cadastra evento", "novo evento", "criar evento"]
@@ -86,13 +91,17 @@ class AssistenteVirtual:
                  groq_api_key=None, porta_arduino=None, cidade_padrao="Santo André"):
         # --- Reconhecimento e síntese de voz ---
         self.reconhecedor = sr.Recognizer()
-        self.reconhecedor.pause_threshold = 1.2
+        # pause_threshold: quanto tempo de silêncio o reconhecedor tolera
+        # antes de considerar que você terminou de falar. Valor mais alto
+        # evita cortar o comando quando você pausa naturalmente depois da
+        # palavra de ativação (ex: "Johnny... cadastrar evento").
+        self.reconhecedor.pause_threshold = 2.0
         self.reconhecedor.non_speaking_duration = 0.5
 
         self.motor_voz_offline = pyttsx3.init()
         self.motor_voz_offline.setProperty("rate", 180)
         self.motor_voz_offline.setProperty("volume", 1.0)
-        mixer.init()  # usado pela voz online (gTTS), que é a voz principal
+        mixer.init()  # usado pela voz online (edge-tts), que é a voz principal
 
         # --- Agenda ---
         self.arquivo_agenda = arquivo_agenda
@@ -117,8 +126,8 @@ class AssistenteVirtual:
     # Métodos utilitários de voz
     # ------------------------------------------------------------------
     def falar(self, texto):
-        """Converte texto em fala. Usa o gTTS (voz do Google, natural) como
-        principal e cai para o pyttsx3 offline se não houver internet."""
+        """Converte texto em fala. Usa o edge-tts (voz neural masculina em
+        pt-BR) como principal e cai para o pyttsx3 offline se não houver internet."""
         print(f"[Johnny]: {texto}")
         try:
             self._falar_online(texto)
@@ -127,12 +136,14 @@ class AssistenteVirtual:
             self._falar_offline(texto)
 
     def _falar_online(self, texto):
-        """Gera um áudio com gTTS e toca com o pygame. Requer internet."""
+        """Gera um áudio com edge-tts (voz neural da Microsoft) e toca com o
+        pygame. Requer internet."""
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as arquivo_temp:
             caminho_audio = arquivo_temp.name
 
         try:
-            gTTS(texto, lang="pt-br").save(caminho_audio)
+            comunicador = edge_tts.Communicate(texto, voice=self.VOZ_EDGE_TTS)
+            asyncio.run(comunicador.save(caminho_audio))
             mixer.music.load(caminho_audio)
             mixer.music.play()
             while mixer.music.get_busy():
@@ -146,7 +157,7 @@ class AssistenteVirtual:
         self.motor_voz_offline.say(texto)
         self.motor_voz_offline.runAndWait()
 
-    def ouvir(self, timeout=5, phrase_time_limit=8):
+    def ouvir(self, timeout=5, phrase_time_limit=12):
         """Captura áudio do microfone e devolve o texto reconhecido em minúsculas (ou None)."""
         with sr.Microphone() as microfone:
             self.reconhecedor.adjust_for_ambient_noise(microfone, duration=1)
