@@ -1,4 +1,4 @@
-# Johnny Silverhand — Assistente Virtual por Voz
+# LumiBot — Assistente Virtual por Voz
 
 Projeto acadêmico de assistente virtual por voz, inspirado no Google Assistente e na Alexa. Reconhece comandos de voz em português, responde por síntese de voz, reconhece rostos via webcam e integra com uma IA generativa (Groq) para perguntas abertas.
 
@@ -6,7 +6,7 @@ Projeto acadêmico de assistente virtual por voz, inspirado no Google Assistente
 
 | # | Comando de voz (aceita variações) | O que faz |
 |---|---|---|
-| 1 | `"Johnny"` / `"Johnny Silverhand"` | Palavra de ativação. Sem ela, nenhum comando é executado — o texto ouvido é só exibido no console. |
+| 1 | `"Lumi"` / `"LumiBot"` | Palavra de ativação. Sem ela, nenhum comando é executado — o texto ouvido é só exibido no console. |
 | 2 | "cadastrar evento", "novo evento", "criar evento"... | Pergunta o evento, escuta a resposta e grava em `agenda.txt`. |
 | 3 | "ler agenda", "mostrar agenda", "quais são meus eventos"... | Lê em voz alta todos os eventos cadastrados. |
 | 4 | "que horas são", "me diz as horas"... | Fala o horário atual. |
@@ -23,7 +23,7 @@ Todos os gatilhos aceitos por comando estão centralizados nas constantes `GATIL
 ## Estrutura do projeto
 
 ```
-assistente-johnny/
+assistente-Lumi/
 ├── assistente.py            # classe AssistenteVirtual + loop principal
 ├── capturar_rosto.py         # captura amostras de rosto (chamado direto ou pelo assistente)
 ├── treinar_modelo.py         # treina o EigenFaceRecognizer e salva o modelo
@@ -45,7 +45,7 @@ assistente-johnny/
 1. Clone o repositório e entre na pasta:
    ```bash
    git clone <url-do-seu-repositorio>
-   cd assistente-johnny
+   cd assistente-Lumi
    ```
 
 2. Se não tiver o Python 3.12 instalado, no Windows dá pra instalar direto pelo terminal:
@@ -81,7 +81,7 @@ assistente-johnny/
 
 Duas formas de fazer isso:
 
-**Pelo assistente (recomendado):** com o `assistente.py` rodando, diga *"Johnny cadastrar rosto"*. Ele pergunta o nome por voz e começa a captura automaticamente — não abre nenhuma janela de câmera nem precisa apertar tecla, basta manter o rosto enquadrado e virar levemente a cabeça pros lados. O próprio assistente narra o andamento ("começando a captura", "metade das fotos capturadas"...) e, ao terminar as 25 fotos, treina o modelo na sequência sozinho, recarregando tudo sem precisar reiniciar.
+**Pelo assistente (recomendado):** com o `assistente.py` rodando, diga *"Lumi cadastrar rosto"*. Ele pergunta o nome por voz e começa a captura automaticamente — não abre nenhuma janela de câmera nem precisa apertar tecla, basta manter o rosto enquadrado e virar levemente a cabeça pros lados. O próprio assistente narra o andamento ("começando a captura", "metade das fotos capturadas"...) e, ao terminar as 25 fotos, treina o modelo na sequência sozinho, recarregando tudo sem precisar reiniciar.
 
 **Manualmente, rodando os scripts direto:**
 1. `python capturar_rosto.py` (pergunta o nome no terminal) ou `python capturar_rosto.py nome_da_pessoa` (pula a pergunta). Nesse modo, abre uma janela com o vídeo pra você se enquadrar; a captura em si continua automática — sem precisar apertar tecla nenhuma, exceto `q` se quiser cancelar antes de terminar.
@@ -94,7 +94,7 @@ Duas formas de fazer isso:
 python assistente.py
 ```
 
-A assistente vai falar "Johnny Silverhand ativado" e ficar ouvindo o microfone. Diga o nome de ativação seguido do comando, por exemplo: *"Johnny, que horas são"*.
+A assistente vai falar "LumiBot ativado" e ficar ouvindo o microfone. Diga o nome de ativação seguido do comando, por exemplo: *"Lumi, que horas são"*.
 
 ### Controle do Arduino (extra)
 

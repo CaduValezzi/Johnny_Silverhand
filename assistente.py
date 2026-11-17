@@ -1,11 +1,11 @@
 """
-Assistente Virtual "Johnny Silverhand"
+Assistente Virtual "LumiBot"
 =======================================
 Projeto acadêmico de assistente virtual por voz, inspirado no
 Google Assistente / Alexa.
 
 Funcionalidades implementadas:
- 1. Ativação por palavra-chave ("Johnny Silverhand" ou apenas "Johnny")
+ 1. Ativação por palavra-chave ("LumiBot" ou apenas "Lumi")
  2. Cadastro de evento na agenda, com dia e horário (agenda.txt)
  3. Leitura da agenda (nome do evento, dia e horário)
  4. Consulta do horário atual
@@ -17,6 +17,11 @@ Funcionalidades implementadas:
  10. Extras (desafio do grupo):
        - Previsão do tempo por voz
        - Controle de um dispositivo (LED) via Arduino
+ 11. Robô CitizenTech (Arduino Uno + LDR + servo + LEDs):
+       - Cumprimento: LED verde + servo acena
+       - Verificação da iluminação: servo varre, LDR lê, LED vermelho alerta,
+         Groq explica a situação por voz
+       - Relatório de manutenção gerado pela Groq (relatorio.txt)
 
 Qualquer comando só é aceito depois que a palavra de ativação é reconhecida
 na mesma fala. Caso contrário, o texto reconhecido é apenas exibido no
@@ -50,6 +55,7 @@ import capturar_rosto
 
 try:
     import serial  # pyserial - só é necessário se for usar o Arduino
+    import serial.tools.list_ports
 except ImportError:
     serial = None
 
@@ -87,7 +93,7 @@ class AssistenteVirtual:
     """Encapsula toda a lógica do assistente: ouvir, decidir, agir e falar."""
 
     # Palavras que ativam a assistente (aceita o nome completo ou o apelido)
-    PALAVRAS_ATIVACAO = ["johnny silverhand", "johnny"]
+    PALAVRAS_ATIVACAO = ["lumi", "lumibote", "lume", "lumebote"]
 
     # Voz usada pelo edge-tts (voz online principal). Vozes masculinas em pt-BR:
     # "pt-BR-AntonioNeural"; femininas: "pt-BR-FranciscaNeural".
@@ -96,6 +102,10 @@ class AssistenteVirtual:
     # Confiança máxima (quanto menor, mais parecido) pra considerar um rosto
     # reconhecido. Acima disso, é tratado como "desconhecido".
     LIMITE_CONFIANCA_FACE = 4000
+
+    # Limiares do LDR (0-1023, mais luz = valor maior). Calibre no seu ambiente.
+    LIMIAR_ESCURO = 700
+    LIMIAR_PENUMBRA = 500
 
     # Gatilhos de voz aceitos para cada comando (várias formas de falar a mesma coisa)
     GATILHOS_CADASTRAR_EVENTO = ["cadastrar evento", "cadastra um evento", "cadastra evento", "novo evento", "criar evento"]
@@ -109,6 +119,10 @@ class AssistenteVirtual:
     GATILHOS_CLIMA = ["clima", "previsão do tempo", "previsao do tempo", "qual o clima", "vai chover"]
     GATILHOS_LIGAR_LUZ = ["ligar luz", "acender luz", "acende a luz"]
     GATILHOS_DESLIGAR_LUZ = ["desligar luz", "apagar luz", "apaga a luz"]
+    GATILHOS_CUMPRIMENTAR = ["olá", "bom dia", "boa tarde", "boa noite", "tudo bem"]
+    GATILHOS_VERIFICAR_LUZ = ["como está a luz", "como está a iluminação", "verificar iluminação",
+                              "verificar a iluminação", "verificar luz", "analisar iluminação", "iluminação"]
+    GATILHOS_RELATORIO = ["relatório", "relatorio"]
 
     # Operadores aceitos na calculadora por voz (chave -> função)
     OPERADORES = {
@@ -131,7 +145,7 @@ class AssistenteVirtual:
         # pause_threshold: quanto tempo de silêncio o reconhecedor tolera
         # antes de considerar que você terminou de falar. Valor mais alto
         # evita cortar o comando quando você pausa naturalmente depois da
-        # palavra de ativação (ex: "Johnny... cadastrar evento").
+        # palavra de ativação (ex: "Lumi... cadastrar evento").
         self.reconhecedor.pause_threshold = 2.0
         self.reconhecedor.non_speaking_duration = 0.5
 
@@ -158,6 +172,7 @@ class AssistenteVirtual:
         # --- Extras: clima e Arduino ---
         self.cidade_padrao = cidade_padrao
         self.arduino = self._conectar_arduino(porta_arduino)
+        self.historico_luz = []  # (hora, valor LDR, nível) para o relatório
 
         # --- Comandos (padrão Command) ---
         self.comandos = self._construir_comandos()
@@ -168,7 +183,7 @@ class AssistenteVirtual:
     def falar(self, texto):
         """Converte texto em fala. Usa o edge-tts (voz neural masculina em
         pt-BR) como principal e cai para o pyttsx3 offline se não houver internet."""
-        print(f"[Johnny]: {texto}")
+        print(f"[Lumi]: {texto}")
         try:
             self._falar_online(texto)
         except Exception as erro:
@@ -245,6 +260,9 @@ class AssistenteVirtual:
             Comando("clima", self.GATILHOS_CLIMA, lambda texto: self.falar_previsao_tempo(texto)),
             Comando("ligar_luz", self.GATILHOS_LIGAR_LUZ, lambda texto: self.controlar_luz("ligar")),
             Comando("desligar_luz", self.GATILHOS_DESLIGAR_LUZ, lambda texto: self.controlar_luz("desligar")),
+            Comando("cumprimentar", self.GATILHOS_CUMPRIMENTAR, lambda texto: self.cumprimentar()),
+            Comando("verificar_luz", self.GATILHOS_VERIFICAR_LUZ, lambda texto: self.verificar_luz()),
+            Comando("relatorio", self.GATILHOS_RELATORIO, lambda texto: self.gerar_relatorio()),
         ]
 
     def processar_comando(self, comando_texto):
@@ -531,23 +549,27 @@ class AssistenteVirtual:
     # ------------------------------------------------------------------
     # Item 9: IA generativa (Groq) - fallback para perguntas abertas
     # ------------------------------------------------------------------
+    def _perguntar_groq(self, pergunta, sistema=None):
+        """Consulta a Groq e devolve o texto da resposta (levanta exceção se falhar)."""
+        resposta = self.groq_client.chat.completions.create(
+            model="openai/gpt-oss-120b",
+            messages=[
+                {
+                    "role": "system",
+                    "content": sistema or (
+                        "Você é o LumiBot, um robô assistente objetivo. "
+                        "Responda sempre em português, em no máximo 40 palavras."
+                    ),
+                },
+                {"role": "user", "content": pergunta},
+            ],
+        )
+        return resposta.choices[0].message.content
+
     def perguntar_ia(self, comando):
         self.falar("Deixa eu pensar...")
         try:
-            resposta = self.groq_client.chat.completions.create(
-                model="openai/gpt-oss-120b",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "Você é o Johnny Silverhand, uma assistente virtual objetiva. "
-                            "Responda sempre em português, em no máximo 40 palavras."
-                        ),
-                    },
-                    {"role": "user", "content": comando},
-                ],
-            )
-            self.falar(resposta.choices[0].message.content)
+            self.falar(self._perguntar_groq(comando))
         except Exception as erro:
             print(f"Erro ao consultar a IA generativa: {erro}")
             self.falar("Não consegui pensar em uma resposta agora.")
@@ -579,34 +601,129 @@ class AssistenteVirtual:
     # Item 10 (extra 2): controle de dispositivo via Arduino
     # ------------------------------------------------------------------
     def _conectar_arduino(self, porta):
-        """Tenta conectar ao Arduino; falha graciosamente se não houver hardware."""
-        if not porta or serial is None:
+        """Conecta ao Arduino na porta informada ou, se porta=None, procura
+        sozinho. Falha graciosamente se não houver hardware."""
+        if serial is None:
+            return None
+        if not porta:
+            for p in serial.tools.list_ports.comports():
+                if any(k in (p.description or "") for k in ("Arduino", "CH340", "USB-SERIAL")) \
+                        or "ACM" in p.device or "usbmodem" in p.device:
+                    porta = p.device
+                    break
+        if not porta:
+            print("Aviso: Arduino não encontrado. Comandos do robô ficarão indisponíveis.")
             return None
         try:
-            conexao = serial.Serial(porta, 9600, timeout=1)
+            conexao = serial.Serial(porta, 9600, timeout=5)
             time.sleep(2)  # aguarda o Arduino reiniciar após abrir a porta
+            print(f"Arduino conectado em {porta}.")
             return conexao
         except Exception as erro:
-            print(f"Aviso: não foi possível conectar ao Arduino ({erro}). Comando de luz ficará indisponível.")
+            print(f"Aviso: não foi possível conectar ao Arduino ({erro}). Comandos do robô ficarão indisponíveis.")
             return None
+
+    def _enviar_arduino(self, comando, aguardar=True):
+        """Envia um comando (uma linha) ao Arduino e devolve a resposta."""
+        self.arduino.reset_input_buffer()
+        self.arduino.write((comando + "\n").encode())
+        if aguardar:
+            return self.arduino.readline().decode(errors="ignore").strip()
+        return ""
 
     def controlar_luz(self, comando):
         if not self.arduino:
             self.falar("Não encontrei nenhum Arduino conectado.")
             return
-        if "ligar" in comando:
-            self.arduino.write(b"a")
+        if comando == "ligar":
+            self._enviar_arduino("VERDE:1")
+            self._enviar_arduino("ALERTA:1")
             self.falar("Luz ligada.")
-        elif "desligar" in comando:
-            self.arduino.write(b"b")
+        else:
+            self._enviar_arduino("VERDE:0")
+            self._enviar_arduino("ALERTA:0")
             self.falar("Luz desligada.")
+
+    # ------------------------------------------------------------------
+    # Robô CitizenTech: cumprimento, monitoramento de iluminação e relatório
+    # ------------------------------------------------------------------
+    def cumprimentar(self):
+        """LED verde + servo acena enquanto o robô fala."""
+        if self.arduino:
+            self._enviar_arduino("OI", aguardar=False)
+        self.falar("Olá! Sou o Lumi, o robô de monitoramento de iluminação. Como posso ajudar?")
+        if self.arduino:
+            self.arduino.readline()  # espera o aceno terminar (o Arduino responde OK)
+
+    def _classificar_luz(self, valor):
+        if valor > self.LIMIAR_ESCURO:
+            return "insuficiente"
+        if valor > self.LIMIAR_PENUMBRA:
+            return "baixa"
+        return "adequada"
+
+    def verificar_luz(self):
+        """Servo varre a área, o LDR é lido, o LED vermelho avisa se a
+        iluminação for insuficiente e a Groq explica a situação por voz."""
+        if not self.arduino:
+            self.falar("Não encontrei nenhum Arduino conectado.")
+            return
+
+        self.falar("Verificando a iluminação do local.")
+        self._enviar_arduino("VARRER")
+        try:
+            valor = int(self._enviar_arduino("LER").split(":")[1])
+        except (IndexError, ValueError):
+            self.falar("Não consegui ler o sensor de luz.")
+            return
+
+        nivel = self._classificar_luz(valor)
+        self.historico_luz.append((datetime.now().strftime("%H:%M:%S"), valor, nivel))
+        self._enviar_arduino("ALERTA:1" if nivel == "insuficiente" else "ALERTA:0")
+
+        try:
+            self.falar(self._perguntar_groq(
+                f"Leitura do sensor LDR: {valor} (escala 0-1023). Iluminação {nivel}. "
+                "Explique a situação para quem está no local e diga se é preciso acionar a manutenção.",
+                sistema=(
+                    "Você é o LumiBot, robô de monitoramento de iluminação em espaços "
+                    "públicos (projeto CitizenTech). Responda em português, em no máximo 40 palavras, "
+                    "sem markdown."
+                ),
+            ))
+        except Exception as erro:
+            print(f"Erro ao consultar a IA generativa: {erro}")
+            self.falar(f"A iluminação está {nivel}.")
+
+    def gerar_relatorio(self):
+        """Pede à Groq um relatório de manutenção com as leituras feitas e salva em relatorio.txt."""
+        if not self.historico_luz:
+            self.falar("Ainda não tenho leituras. Peça para eu verificar a iluminação primeiro.")
+            return
+
+        linhas = "\n".join(f"{h} - LDR {v} ({n})" for h, v, n in self.historico_luz)
+        try:
+            texto = self._perguntar_groq(
+                "Gere um relatório curto de manutenção da iluminação pública com base nestas leituras:\n" + linhas,
+                sistema=(
+                    "Você é um robô de monitoramento de iluminação pública (projeto CitizenTech). "
+                    "Responda em português, em no máximo 60 palavras, sem markdown."
+                ),
+            )
+        except Exception as erro:
+            print(f"Erro ao consultar a IA generativa: {erro}")
+            texto = "Não consegui gerar o resumo, mas as leituras foram registradas."
+
+        with open("relatorio.txt", "w", encoding="utf-8") as arquivo:
+            arquivo.write(f"Relatório gerado em {datetime.now():%d/%m/%Y %H:%M}\n\n{linhas}\n\n{texto}\n")
+        self.falar(texto)
 
     # ------------------------------------------------------------------
     # Loop principal
     # ------------------------------------------------------------------
     def executar(self):
         """Loop de escuta contínua: só age quando ouve a palavra de ativação."""
-        self.falar("Johnny Silverhand ativado. Estou ouvindo.")
+        self.cumprimentar()
         while True:
             texto = self.ouvir()
             if not texto:
@@ -631,8 +748,8 @@ if __name__ == "__main__":
             print(f"Aviso: arquivo '{caminho}' não encontrado. Crie esse arquivo com sua chave da Groq dentro.")
             return None
 
-    # A porta do Arduino é opcional -- ex: "COM3" no Windows ou "/dev/ttyUSB0" no
-    # Linux; deixe None se não for usar o comando de luz.
+    # Porta do Arduino -- ex: "COM3" no Windows ou "/dev/ttyUSB0" no Linux.
+    # Com None, o assistente procura o Arduino sozinho.
     assistente = AssistenteVirtual(
         groq_api_key=carregar_chave_groq(),
         porta_arduino=None,
